@@ -19,36 +19,26 @@ No copyrighted file is included in this repo. If Rockstar Games or any affiliate
 
 And don't email me for asking the mirror folder. I will not reply to the email.
 
-# How to use
-1. Download the ZIP or just `git clone` it. It should have all this file and folders.
-<p align="center">
-  <img src="media/Screenshot 2026-10-07 172103.png" alt="playgta5 SC">
-</p>
+# Run locally
+1. Download the source ZIP or clone this repository.
+2. Make sure you already have an authorized site snapshot on your computer. The
+   selected folder must contain `index.html`, `data/manifest.json`, and
+   `b/<build>/loader.js`, `game.js`, and `game.wasm`. You can select the site
+   root or its parent `mirror` folder.
 
-2. Paste your `.mirror` folder at your desired path. (It should have 19.7 GB of file size. Check the pic below.)
-<p align="center">
-  <img src="media/Screenshot 2026-10-07 172216.png" alt="Folder Properties">
-</p>
-<p align="center">
-  <img src="media/Screenshot 2026-10-07 172718.png" alt="Folder Properties">
-</p>
-<p align="center">
-  <img src="media/Screenshot 2026-10-07 172758.png" alt="Folder Properties">
-</p>
+   A standard Steam, Epic, or Rockstar GTA V installation is not the format this
+   browser snapshot reads.
 
-3. Run the `Launch-Local.cmd` and it will automatically open the URL at `http://localhost:8000/`.
+3. Run `Launch-Local.cmd` (or `Start-Local.ps1`). A native folder picker asks
+   where your snapshot is. The server reads it in place from your disk; it does
+   not upload, copy, or download the snapshot. It binds only to `127.0.0.1`.
+4. The launcher opens `http://localhost:8000/`. Press Ctrl+C in the launcher
+   window to stop the local server.
 
-4. Voila!
+The launcher does not include or fetch the `.mirror` payload. Use only files
+you are authorized to use.
 
 # Requirement
-Scripts require standard-library Python 3.11 or newer. The bundled Python path
-in the commands above is specific to the original PC; the portable ZIP instead
-provides `runtime\python.exe` and the double-click launcher.
-Completed files and `.part` transfers are retained for resumption. Final checks
-cover inventory sizes, runtime hash samples, WASM signature, HTTP isolation,
-range reads and both batch formats. Actual gameplay requires separate browser
-validation. A public client snapshot is not the site's original development repository.
-
-To resume with the current uncapped settings, append `--workers 32 --rate-mib 0`
-to the downloader command. Content lengths from HTTP take precedence over the
-source manifest when it is stale; mismatches are recorded explicitly.
+The Windows launcher uses the built-in folder picker and the included Python
+runtime. If running `serve_local.py` directly, use Python 3.11 or newer;
+`--root <path>` selects a snapshot without opening a picker.

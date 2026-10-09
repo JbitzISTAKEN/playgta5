@@ -1,17 +1,71 @@
-"""Local mirror server: isolation headers, byte ranges, and engine batch I/O."""
-import argparse, gzip, io, json, mimetypes, re, shutil, webbrowser
+"""Serve an existing local site snapshot with isolation headers and byte ranges."""
+import argparse, gzip, io, json, mimetypes, re, webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit, unquote, parse_qs
+from urllib.parse import urlsplit, parse_qs
 
-ROOT = Path(__file__).resolve().parent / 'mirror' / 'playgta5.com'
+DEFAULT_ROOT = Path(__file__).resolve().parent / 'mirror' / 'playgta5.com'
+ROOT = DEFAULT_ROOT
 mimetypes.add_type('application/wasm', '.wasm')
 mimetypes.add_type('text/javascript', '.js')
+
+
+def is_snapshot_root(path):
+    """Return whether path has the files this browser snapshot needs."""
+    if not (path / 'index.html').is_file():
+        return False
+    if not (path / 'data' / 'manifest.json').is_file():
+        return False
+    build_root = path / 'b'
+    if not build_root.is_dir():
+        return False
+    try:
+        return any(
+            (build / 'loader.js').is_file()
+            and (build / 'game.js').is_file()
+            and (build / 'game.wasm').is_file()
+            for build in build_root.iterdir()
+            if build.is_dir()
+        )
+    except OSError:
+        return False
+
+
+def resolve_site_root(selected_path):
+    """Accept the site root or a parent mirror folder without copying it."""
+    selected = Path(selected_path).expanduser().resolve()
+    candidates = (
+        selected,
+        selected / 'playgta5.com',
+        selected / 'mirror' / 'playgta5.com',
+        selected / '.mirror' / 'playgta5.com',
+    )
+    seen = set()
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if is_snapshot_root(candidate):
+            return candidate
+    raise ValueError(
+        'That folder is not a compatible site snapshot. Select the folder '
+        'containing index.html, data/manifest.json, and b/<build>/loader.js, '
+        'game.js, and game.wasm, or select its parent mirror folder.'
+    )
+
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         self.byte_range = None
         super().__init__(*args, directory=str(ROOT), **kwargs)
+
+    def translate_path(self, path):
+        translated = Path(super().translate_path(path)).resolve()
+        root = ROOT.resolve()
+        if not translated.is_relative_to(root):
+            return str(root / '__blocked__')
+        return str(translated)
 
     def end_headers(self):
         self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
@@ -23,8 +77,12 @@ class Handler(SimpleHTTPRequestHandler):
     def send_head(self):
         if not self.headers.get('Range'):
             return super().send_head()
-        path = Path(self.translate_path(self.path))
-        if not path.is_file():
+        try:
+            path = Path(self.translate_path(self.path)).resolve(strict=True)
+        except (OSError, RuntimeError):
+            self.send_error(404)
+            return None
+        if not path.is_relative_to(ROOT.resolve()) or not path.is_file():
             self.send_error(404)
             return None
         size = path.stat().st_size
@@ -66,21 +124,31 @@ class Handler(SimpleHTTPRequestHandler):
         if url.path != '/data/batch':
             self.send_error(404)
             return
-        length = int(self.headers.get('Content-Length', '0'))
-        if length > 1024 * 1024:
-            self.send_error(413)
-            return
         try:
+            length = int(self.headers.get('Content-Length', '0'))
+            if length < 0 or length > 1024 * 1024:
+                self.send_error(413)
+                return
             runs = json.loads(self.rfile.read(length))
             if not isinstance(runs, list) or len(runs) > 1000:
                 raise ValueError('invalid batch')
             selected = []
             data_root = (ROOT / 'data').resolve()
-            for name, start, end in runs:
+            for run in runs:
+                if not isinstance(run, list) or len(run) != 3:
+                    raise ValueError('invalid run')
+                name, start, end = run
+                if (
+                    not isinstance(name, str)
+                    or not isinstance(start, int) or isinstance(start, bool)
+                    or not isinstance(end, int) or isinstance(end, bool)
+                ):
+                    raise ValueError('invalid file/range')
                 file = (data_root / name).resolve()
                 if not file.is_relative_to(data_root) or start < 0 or end < start:
                     raise ValueError('invalid file/range')
-                selected.append((file, start, max(0, min(end + 1, file.stat().st_size) - start)))
+                size = file.stat().st_size
+                selected.append((file, start, max(0, min(end + 1, size) - start)))
             total = sum(n for _, _, n in selected)
             if total > 64 * 1024 * 1024:
                 raise ValueError('batch exceeds 64 MiB')
@@ -101,17 +169,29 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_header('Content-Encoding', 'gzip')
             self.end_headers()
             self.wfile.write(body)
-        except (ValueError, TypeError, OSError) as exc:
+        except (ValueError, TypeError, OSError, json.JSONDecodeError) as exc:
             self.send_error(400, str(exc))
 
+
 if __name__ == '__main__':
-    args = argparse.ArgumentParser()
-    args.add_argument('--port', type=int, default=8000)
-    args.add_argument('--open', action='store_true', help='open the default browser after binding')
-    options = args.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--root',
+        type=Path,
+        help='site snapshot root or its parent mirror folder (served in place)',
+    )
+    parser.add_argument('--port', type=int, default=8000)
+    parser.add_argument('--open', action='store_true', help='open the browser after binding')
+    options = parser.parse_args()
+
+    try:
+        ROOT = resolve_site_root(options.root or DEFAULT_ROOT)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     server = ThreadingHTTPServer(('127.0.0.1', options.port), Handler)
     address = 'http://localhost:%d/' % server.server_port
-    print('Local mirror: %s (Ctrl+C to stop)' % address, flush=True)
+    print('Serving local snapshot from %s at %s (Ctrl+C to stop)' % (ROOT, address), flush=True)
     if options.open:
         webbrowser.open(address)
     try:
