@@ -134,6 +134,8 @@ class Handler(SimpleHTTPRequestHandler):
                 raise ValueError('invalid batch')
             selected = []
             data_root = (ROOT / 'data').resolve()
+            if not data_root.is_relative_to(ROOT.resolve()):
+                raise ValueError('invalid data root')
             for run in runs:
                 if not isinstance(run, list) or len(run) != 3:
                     raise ValueError('invalid run')
